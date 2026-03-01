@@ -109,7 +109,7 @@ export const login = async (req, res) => {
     res.cookie("token", token, {
       httpOnly: true,
       secure: true,                // false for HTTP (EC2)
-      sameSite: "None",              // works on HTTP
+      sameSite: "Lax",              // works on HTTP
       maxAge: 24 * 60 * 60 * 1000,
       path: "/",
     });
@@ -130,7 +130,7 @@ export const logout = async (req, res) => {
     res.clearCookie("token", {
       httpOnly: true,
       secure: true,
-      sameSite: "None",
+      sameSite: "Lax",
       path: "/",
     });
 
