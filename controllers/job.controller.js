@@ -70,34 +70,40 @@ export const postJob = async (req, res) => {
 export const getAllJobs = async (req, res) => {
   try {
     const keyword = req.query.keyword?.trim() || "";
+    const page = parseInt(req.query.page) || 1;
+    const limit = 6; // Jobs per page
+    const skip = (page - 1) * limit;
+
     const query = keyword
       ? {
-        $or: [
-          { title: { $regex: keyword, $options: "i" } },
-          { description: { $regex: keyword, $options: "i" } },
-        ],
-      }
+          $or: [
+            { title: { $regex: keyword, $options: "i" } },
+            { description: { $regex: keyword, $options: "i" } },
+          ],
+        }
       : {};
 
+    // 1. Get total count capped at 200 for the pagination math
+    const totalJobsInPool = await Job.countDocuments(query).limit(200);
+
+    // 2. Fetch the specific page from the newest 200 jobs
     const jobs = await Job.find(query)
       .populate("company")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(200) // Cap the pool
+      .skip(skip) // Skip for pagination
+      .limit(limit); // Limit per page
 
-    if (!jobs?.length) {
-      return res
-        .status(404)
-        .json({ message: "No jobs found", status: false });
+    if (!jobs?.length && page === 1) {
+      return res.status(404).json({ message: "No jobs found", status: false });
     }
 
     const formattedJobs = jobs.map((job) => {
-      // Extract company name from description: <strong>Company:</strong> Google India
+      // ... your existing formatting logic (keep exactly as it is) ...
       let companyName = "External Company";
       const match = job.description?.match(/<strong>Company:<\/strong>\s*([^<]+)<\/p>/i);
-      if (match) {
-        companyName = match[1].trim();
-      } else if (job.company?.name) {
-        companyName = job.company.name;
-      }
+      if (match) { companyName = match[1].trim(); } 
+      else if (job.company?.name) { companyName = job.company.name; }
 
       return {
         _id: job._id,
@@ -106,7 +112,7 @@ export const getAllJobs = async (req, res) => {
         location: job.location,
         jobType: job.jobType,
         salary: job.salary,
-        company: companyName, // ← CORRECT & SINGLE
+        company: companyName,
         companyLogo: job.companyLogo || null,
         applicationLink: job.applicationLink || null,
         createdAt: job.createdAt,
@@ -114,7 +120,12 @@ export const getAllJobs = async (req, res) => {
       };
     });
 
-    return res.status(200).json({ jobs: formattedJobs, status: true });
+    return res.status(200).json({ 
+      jobs: formattedJobs, 
+      totalPages: Math.ceil(totalJobsInPool / limit),
+      currentPage: page,
+      status: true 
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ message: "Server Error", status: false });
