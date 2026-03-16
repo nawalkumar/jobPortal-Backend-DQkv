@@ -72,7 +72,7 @@ export const postJob = async (req, res) => {
 ------------------------------------------------- */
 export const getAllJobs = async (req, res) => {
   try {
-    const keyword = req.query.keyword?.trim().toLowerCase() || "";
+    const keyword = req.query.keyword?.trim() || "";
     const page = parseInt(req.query.page) || 1;
     const limit = 6;
     const skip = (page - 1) * limit;
@@ -84,21 +84,24 @@ export const getAllJobs = async (req, res) => {
       const words = keyword.split(/\s+/).filter(Boolean);
       
       if (words.length > 0) {
-        // Use $and so that EVERY word selected must be found 
-        // SOMEWHERE in the job (but not necessarily in the same field)
-        mongoQuery.$and = words.map(word => ({
+        // Build a regex that looks for ANY of these words anywhere in the text
+        // Example: /delhi|mern/i
+        const regexPattern = words.join("|"); 
+        
+        mongoQuery = {
           $or: [
-            { title: { $regex: word, $options: "i" } },
-            { description: { $regex: word, $options: "i" } },
-            { location: { $regex: word, $options: "i" } },
-            { jobType: { $regex: word, $options: "i" } },
-            { experienceLevel: { $regex: word, $options: "i" } }
+            { title: { $regex: regexPattern, $options: "i" } },
+            { description: { $regex: regexPattern, $options: "i" } },
+            { location: { $regex: regexPattern, $options: "i" } },
+            { jobType: { $regex: regexPattern, $options: "i" } },
+            { experienceLevel: { $regex: regexPattern, $options: "i" } }
           ]
-        }));
+        };
       }
     }
 
-    // Search within the most recent 200 jobs
+    // console.log("Final Query:", JSON.stringify(mongoQuery)); // Debugging line
+
     const totalJobsCount = await Job.countDocuments(mongoQuery).limit(200);
 
     const jobs = await Job.find(mongoQuery)
@@ -138,7 +141,6 @@ export const getAllJobs = async (req, res) => {
       currentPage: page,
       status: true 
     });
-
   } catch (error) {
     console.error("SEARCH ERROR:", error);
     return res.status(500).json({ message: "Server Error", status: false });
