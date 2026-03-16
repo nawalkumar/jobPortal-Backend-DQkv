@@ -67,9 +67,6 @@ export const postJob = async (req, res) => {
 /* -------------------------------------------------
    USER – get all jobs (internal + external API jobs)
 ------------------------------------------------- */
-/* -------------------------------------------------
-    USER – get all jobs with Pagination & Multi-Filter
-------------------------------------------------- */
 export const getAllJobs = async (req, res) => {
   try {
     const keyword = req.query.keyword ? String(req.query.keyword).trim() : "";
@@ -80,26 +77,37 @@ export const getAllJobs = async (req, res) => {
     let query = {};
 
     if (keyword !== "") {
-      // Split into words: "Mern Developer" -> ["Mern", "Developer"]
       const searchTerms = keyword.split(/\s+/).filter(term => term.length > 0);
       
       if (searchTerms.length > 0) {
-        // Use $and so that EVERY filter must be satisfied
-        query.$and = searchTerms.map(term => ({
-          $or: [
-            // Use \b to ensure "Mern" doesn't match "Sales Manager"
-            // We use a constructor to create a safe Regex with boundaries
+        query.$and = searchTerms.map(term => {
+          // Check if the term is a number or range (e.g., "50", "0-3")
+          const isNumeric = /\d/.test(term);
+          
+          const orConditions = [
             { title: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
             { location: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
             { description: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
             { jobType: { $regex: new RegExp(`\\b${term}\\b`, 'i') } }
-          ]
-        }));
+          ];
+
+          // If the filter looks like a number, add numeric checks
+          if (isNumeric) {
+            // Extract the first number found (e.g., "50k" -> 50, "0-3" -> 0)
+            const num = parseInt(term.match(/\d+/)[0]);
+            
+            orConditions.push(
+              { experienceLevel: { $lte: num + 2, $gte: num - 2 } }, // Range check for experience
+              { salary: { $gte: num * 1000 - 20000, $lte: num * 1000 + 20000 } } // Rough salary check
+            );
+          }
+
+          return { $or: orConditions };
+        });
       }
     }
 
     const totalJobs = await Job.countDocuments(query);
-
     const jobs = await Job.find(query)
       .populate("company")
       .sort({ createdAt: -1 })
@@ -139,12 +147,7 @@ export const getAllJobs = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("DEBUGGING SEARCH ERROR:", error.message);
-    return res.status(500).json({ 
-      status: false, 
-      message: "Server Error",
-      error: error.message 
-    });
+    return res.status(500).json({ status: false, message: "Server Error" });
   }
 };
 /* -------------------------------------------------
