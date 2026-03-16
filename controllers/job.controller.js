@@ -77,12 +77,15 @@ export const getAllJobs = async (req, res) => {
     const limit = 6;
     const skip = (page - 1) * limit;
 
-    let mongoQuery = {};
+   let mongoQuery = {};
 
-    // 1. IMPROVED QUERY BUILDING
     if (keyword) {
-      const words = keyword.split(/\s+/).filter(Boolean); // filter(Boolean) removes empty strings
+      // 1. Split words and clean them
+      const words = keyword.split(/\s+/).filter(Boolean);
+      
       if (words.length > 0) {
+        // 2. This ensures that for EVERY word selected, 
+        // there is a match in at least ONE of the job fields.
         mongoQuery.$and = words.map(word => ({
           $or: [
             { title: { $regex: word, $options: "i" } },
