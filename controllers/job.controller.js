@@ -79,24 +79,27 @@ export const getAllJobs = async (req, res) => {
 
     let query = {};
 
-    // Only build the search query if keyword actually has text
     if (keyword !== "") {
-      // Split into words and clean out any empty spaces
       const searchTerms = keyword.split(/\s+/).filter(term => term.length > 0);
       
       if (searchTerms.length > 0) {
-        // We use $or so that the search matches ANY of the words in the title or location
-        // This prevents the "Server Error" caused by strict $and logic
         query.$or = searchTerms.flatMap(term => [
           { title: { $regex: term, $options: "i" } },
           { location: { $regex: term, $options: "i" } },
           { description: { $regex: term, $options: "i" } },
-          { experienceLevel: { $regex: term, $options: "i" } }
+          { jobType: { $regex: term, $options: "i" } }
+          // REMOVED experienceLevel from here because it is a Number in your DB
         ]);
+
+        // If the user specifically searched for a number (like "3"), 
+        // we can optionally try to match experienceLevel exactly
+        const numValue = parseInt(searchTerms[0]);
+        if (!isNaN(numValue)) {
+          query.$or.push({ experienceLevel: numValue });
+        }
       }
     }
 
-    // Use countDocuments first to see if anything exists
     const totalJobs = await Job.countDocuments(query);
 
     const jobs = await Job.find(query)
@@ -105,7 +108,6 @@ export const getAllJobs = async (req, res) => {
       .skip(skip)
       .limit(limit);
 
-    // If no jobs found, don't throw error, just return empty array
     const formattedJobs = (jobs || []).map((job) => {
       let companyName = "External Company";
       const match = job.description?.match(/<strong>Company:<\/strong>\s*([^<]+)<\/p>/i);
@@ -127,6 +129,7 @@ export const getAllJobs = async (req, res) => {
         applicationLink: job.applicationLink || null,
         createdAt: job.createdAt,
         isExternal: !!job.applicationLink,
+        experienceLevel: job.experienceLevel // Include it in response
       };
     });
 
@@ -138,12 +141,11 @@ export const getAllJobs = async (req, res) => {
     });
 
   } catch (error) {
-    // This will print the EXACT error in your Railway/Terminal logs
     console.error("DEBUGGING SEARCH ERROR:", error.message);
     return res.status(500).json({ 
       status: false, 
       message: "Server Error",
-      error: error.message // Temporarily show error message to find the bug
+      error: error.message 
     });
   }
 };
