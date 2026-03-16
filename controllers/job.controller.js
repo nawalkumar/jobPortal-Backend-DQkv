@@ -80,23 +80,21 @@ export const getAllJobs = async (req, res) => {
     let query = {};
 
     if (keyword !== "") {
+      // Split into words: "Mern Developer" -> ["Mern", "Developer"]
       const searchTerms = keyword.split(/\s+/).filter(term => term.length > 0);
       
       if (searchTerms.length > 0) {
-        query.$or = searchTerms.flatMap(term => [
-          { title: { $regex: term, $options: "i" } },
-          { location: { $regex: term, $options: "i" } },
-          { description: { $regex: term, $options: "i" } },
-          { jobType: { $regex: term, $options: "i" } }
-          // REMOVED experienceLevel from here because it is a Number in your DB
-        ]);
-
-        // If the user specifically searched for a number (like "3"), 
-        // we can optionally try to match experienceLevel exactly
-        const numValue = parseInt(searchTerms[0]);
-        if (!isNaN(numValue)) {
-          query.$or.push({ experienceLevel: numValue });
-        }
+        // Use $and so that EVERY filter must be satisfied
+        query.$and = searchTerms.map(term => ({
+          $or: [
+            // Use \b to ensure "Mern" doesn't match "Sales Manager"
+            // We use a constructor to create a safe Regex with boundaries
+            { title: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
+            { location: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
+            { description: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
+            { jobType: { $regex: new RegExp(`\\b${term}\\b`, 'i') } }
+          ]
+        }));
       }
     }
 
