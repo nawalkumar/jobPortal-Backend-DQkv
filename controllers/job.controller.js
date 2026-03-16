@@ -72,7 +72,7 @@ export const postJob = async (req, res) => {
 ------------------------------------------------- */
 export const getAllJobs = async (req, res) => {
   try {
-    const keyword = req.query.keyword?.trim() || "";
+    const keyword = req.query.keyword?.trim().toLowerCase() || "";
     const page = parseInt(req.query.page) || 1;
     const limit = 6;
     const skip = (page - 1) * limit;
@@ -80,22 +80,25 @@ export const getAllJobs = async (req, res) => {
     let mongoQuery = {};
 
     if (keyword) {
-      // Split words: "Delhi Mern" -> ["Delhi", "Mern"]
+      // Split "Delhi Mern" into ["delhi", "mern"]
       const words = keyword.split(/\s+/).filter(Boolean);
       
       if (words.length > 0) {
-        // Use $or so it finds jobs matching ANY of the selected filters
-        // This is much more reliable for combined filters
-        mongoQuery.$or = words.flatMap(word => [
-          { title: { $regex: word, $options: "i" } },
-          { description: { $regex: word, $options: "i" } },
-          { location: { $regex: word, $options: "i" } },
-          { jobType: { $regex: word, $options: "i" } },
-          { experienceLevel: { $regex: word, $options: "i" } }
-        ]);
+        // Use $and so that EVERY word selected must be found 
+        // SOMEWHERE in the job (but not necessarily in the same field)
+        mongoQuery.$and = words.map(word => ({
+          $or: [
+            { title: { $regex: word, $options: "i" } },
+            { description: { $regex: word, $options: "i" } },
+            { location: { $regex: word, $options: "i" } },
+            { jobType: { $regex: word, $options: "i" } },
+            { experienceLevel: { $regex: word, $options: "i" } }
+          ]
+        }));
       }
     }
 
+    // Search within the most recent 200 jobs
     const totalJobsCount = await Job.countDocuments(mongoQuery).limit(200);
 
     const jobs = await Job.find(mongoQuery)
@@ -137,7 +140,7 @@ export const getAllJobs = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("CRITICAL BACKEND ERROR:", error);
+    console.error("SEARCH ERROR:", error);
     return res.status(500).json({ message: "Server Error", status: false });
   }
 };
