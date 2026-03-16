@@ -74,49 +74,42 @@ export const getAllJobs = async (req, res) => {
   try {
     const keyword = req.query.keyword?.trim() || "";
     const page = parseInt(req.query.page) || 1;
-    const limit = 6; // Jobs per page
+    const limit = 6;
     const skip = (page - 1) * limit;
 
-    let query = {};
+    let mongoQuery = {};
 
+    // 1. IMPROVED QUERY BUILDING
     if (keyword) {
-      // Split the string into individual words (e.g., "Pune React" -> ["Pune", "React"])
-      const words = keyword.split(/\s+/);
-
-      // Multi-filter logic: Every word must match at least one field in the document
-      query.$and = words.map(word => ({
-        $or: [
-          { title: { $regex: word, $options: "i" } },
-          { description: { $regex: word, $options: "i" } },
-          { location: { $regex: word, $options: "i" } },
-          { jobType: { $regex: word, $options: "i" } },
-          { experienceLevel: { $regex: word, $options: "i" } }
-        ]
-      }));
+      const words = keyword.split(/\s+/).filter(Boolean); // filter(Boolean) removes empty strings
+      if (words.length > 0) {
+        mongoQuery.$and = words.map(word => ({
+          $or: [
+            { title: { $regex: word, $options: "i" } },
+            { description: { $regex: word, $options: "i" } },
+            { location: { $regex: word, $options: "i" } },
+            { jobType: { $regex: word, $options: "i" } },
+            { experienceLevel: { $regex: word, $options: "i" } }
+          ]
+        }));
+      }
     }
 
-    // 1. Get total count within the 200 recent jobs limit for pagination math
-    const totalJobsCount = await Job.countDocuments(query).limit(200);
+    // 2. CONSISTENT COUNTING
+    const totalJobsInPool = await Job.countDocuments(mongoQuery).limit(200);
 
-    // 2. Fetch paginated jobs from the newest 200
-    const jobs = await Job.find(query)
+    // 3. FETCHING
+    const jobs = await Job.find(mongoQuery)
       .populate("company")
       .sort({ createdAt: -1 })
-      .limit(200) // The "Max 200" recent jobs pool
+      .limit(200) 
       .skip(skip)
       .limit(limit);
 
-    if (!jobs?.length && page === 1) {
-      return res.status(404).json({ 
-        message: "No jobs found", 
-        status: false 
-      });
-    }
-
+    // 4. FORMATTING (Keeping your exact logic)
     const formattedJobs = jobs.map((job) => {
       let companyName = "External Company";
       const match = job.description?.match(/<strong>Company:<\/strong>\s*([^<]+)<\/p>/i);
-      
       if (match) {
         companyName = match[1].trim();
       } else if (job.company?.name) {
@@ -138,12 +131,14 @@ export const getAllJobs = async (req, res) => {
       };
     });
 
+    // 5. SUCCESSFUL RESPONSE (Even if empty)
     return res.status(200).json({ 
       jobs: formattedJobs, 
-      totalPages: Math.ceil(totalJobsCount / limit),
+      totalPages: Math.ceil(totalJobsInPool / limit) || 1,
       currentPage: page,
       status: true 
     });
+
   } catch (error) {
     console.error("Backend Error:", error);
     return res.status(500).json({ message: "Server Error", status: false });
