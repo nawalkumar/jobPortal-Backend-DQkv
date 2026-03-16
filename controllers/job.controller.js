@@ -72,46 +72,41 @@ export const postJob = async (req, res) => {
 ------------------------------------------------- */
 export const getAllJobs = async (req, res) => {
   try {
-    const keyword = req.query.keyword?.trim() || "";
+    const keyword = req.query.keyword ? String(req.query.keyword).trim() : "";
     const page = parseInt(req.query.page) || 1;
     const limit = 6;
     const skip = (page - 1) * limit;
 
-    let mongoQuery = {};
+    let query = {};
 
-    if (keyword) {
-      // Split "Delhi Mern" into ["delhi", "mern"]
-      const words = keyword.split(/\s+/).filter(Boolean);
+    // Only build the search query if keyword actually has text
+    if (keyword !== "") {
+      // Split into words and clean out any empty spaces
+      const searchTerms = keyword.split(/\s+/).filter(term => term.length > 0);
       
-      if (words.length > 0) {
-        // Build a regex that looks for ANY of these words anywhere in the text
-        // Example: /delhi|mern/i
-        const regexPattern = words.join("|"); 
-        
-        mongoQuery = {
-          $or: [
-            { title: { $regex: regexPattern, $options: "i" } },
-            { description: { $regex: regexPattern, $options: "i" } },
-            { location: { $regex: regexPattern, $options: "i" } },
-            { jobType: { $regex: regexPattern, $options: "i" } },
-            { experienceLevel: { $regex: regexPattern, $options: "i" } }
-          ]
-        };
+      if (searchTerms.length > 0) {
+        // We use $or so that the search matches ANY of the words in the title or location
+        // This prevents the "Server Error" caused by strict $and logic
+        query.$or = searchTerms.flatMap(term => [
+          { title: { $regex: term, $options: "i" } },
+          { location: { $regex: term, $options: "i" } },
+          { description: { $regex: term, $options: "i" } },
+          { experienceLevel: { $regex: term, $options: "i" } }
+        ]);
       }
     }
 
-    // console.log("Final Query:", JSON.stringify(mongoQuery)); // Debugging line
+    // Use countDocuments first to see if anything exists
+    const totalJobs = await Job.countDocuments(query);
 
-    const totalJobsCount = await Job.countDocuments(mongoQuery).limit(200);
-
-    const jobs = await Job.find(mongoQuery)
+    const jobs = await Job.find(query)
       .populate("company")
       .sort({ createdAt: -1 })
-      .limit(200)
       .skip(skip)
       .limit(limit);
 
-    const formattedJobs = jobs.map((job) => {
+    // If no jobs found, don't throw error, just return empty array
+    const formattedJobs = (jobs || []).map((job) => {
       let companyName = "External Company";
       const match = job.description?.match(/<strong>Company:<\/strong>\s*([^<]+)<\/p>/i);
       if (match) {
@@ -135,15 +130,21 @@ export const getAllJobs = async (req, res) => {
       };
     });
 
-    return res.status(200).json({ 
-      jobs: formattedJobs, 
-      totalPages: Math.ceil(totalJobsCount / limit) || 1,
-      currentPage: page,
-      status: true 
+    return res.status(200).json({
+      status: true,
+      jobs: formattedJobs,
+      totalPages: Math.ceil(totalJobs / limit) || 1,
+      currentPage: page
     });
+
   } catch (error) {
-    console.error("SEARCH ERROR:", error);
-    return res.status(500).json({ message: "Server Error", status: false });
+    // This will print the EXACT error in your Railway/Terminal logs
+    console.error("DEBUGGING SEARCH ERROR:", error.message);
+    return res.status(500).json({ 
+      status: false, 
+      message: "Server Error",
+      error: error.message // Temporarily show error message to find the bug
+    });
   }
 };
 /* -------------------------------------------------
