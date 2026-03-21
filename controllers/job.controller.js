@@ -1,8 +1,10 @@
 // controllers/job.controller.js
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse');
 import { Job } from "../models/job.model.js";
 import sanitizeHTML from "../utils/sanitizeHTML.js";
 import axios from "axios";
-import pdf from "pdf-parse";
 import { User } from "../models/user.model.js";
 
 // Helper function to extract text from Cloudinary PDF
