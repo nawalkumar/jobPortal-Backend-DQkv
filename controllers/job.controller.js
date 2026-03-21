@@ -6,6 +6,7 @@ import { Job } from "../models/job.model.js";
 import sanitizeHTML from "../utils/sanitizeHTML.js";
 import axios from "axios";
 import { User } from "../models/user.model.js";
+import { generateFreeEmbeddings } from "../utils/vectorizer.js";
 
 // Helper function to extract text from Cloudinary PDF
 const extractTextFromPDF = async (url) => {
@@ -24,88 +25,96 @@ const extractTextFromPDF = async (url) => {
 ------------------------------------------------- */
 export const getRecommendedJobs = async (req, res) => {
   try {
-    const userId = req.id; // From your auth middleware
+    const userId = req.id;
     const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({ message: "User not found", success: false });
     }
 
-    const { skills, resume, bio } = user.profile;
-    let resumeText = "";
+    // 1. CHECK/GENERATE USER EMBEDDINGS (THE "AUTOMATIC" PART)
+    let userVector = user.embeddings;
 
-    // 1. Extract text from resume if it exists
-    if (resume) {
-      resumeText = await extractTextFromPDF(resume);
+    if (!userVector || userVector.length === 0) {
+      console.log(`Auto-generating embeddings for: ${user.fullname}`);
+
+      let resumeText = "";
+      if (user.profile?.resume) {
+        // Extracts text from the PDF URL
+        resumeText = await extractTextFromPDF(user.profile.resume);
+      }
+
+      // Combine bio, skills, and resume text
+      const bioData = `
+                ${user.profile?.bio || ""} 
+                ${user.profile?.skills?.join(" ") || ""} 
+                ${resumeText}
+            `.toLowerCase().trim();
+
+      // Guard: If the user has a totally empty profile, stop here
+      if (bioData.length < 10) {
+        return res.status(200).json({
+          success: true,
+          recommendations: [],
+          message: "Update your profile or upload a resume to see matches!"
+        });
+      }
+
+      // Generate the 384-dimension vector (Transformers.js)
+      userVector = await generateFreeEmbeddings(bioData);
+
+      if (userVector) {
+        user.embeddings = userVector;
+        await user.save(); // Save to DB so we don't do this again next time
+      }
     }
 
-    // 2. Fetch all active jobs (Internal + populated Company)
-    const allJobs = await Job.find({}).populate("company");
-
-    // 3. Scoring Algorithm
-    const recommendedJobs = allJobs.map((job) => {
-      let score = 0;
-      const jobTitle = job.title.toLowerCase();
-      const jobDesc = job.description.toLowerCase();
-      const jobReqs = job.requirements.map(r => r.toLowerCase());
-
-      // A. Skill Matching (High Weight: 5 points per match)
-      skills.forEach((skill) => {
-        const s = skill.toLowerCase();
-        if (jobTitle.includes(s)) score += 5;
-        if (jobDesc.includes(s)) score += 3;
-        if (jobReqs.some(req => req.includes(s))) score += 4;
-      });
-
-      // B. Resume Keyword Matching (Medium Weight: 2 points per match)
-      if (resumeText) {
-        // Match Job Requirements against Resume content
-        jobReqs.forEach((req) => {
-          if (resumeText.includes(req)) score += 2;
-        });
-        // Match Job Title against Resume
-        if (resumeText.includes(jobTitle)) score += 3;
+    // 2. VECTOR SEARCH VIA MONGODB ATLAS
+    const recommendations = await Job.aggregate([
+      {
+        $vectorSearch: {
+          index: "vector_index", // Must match your Atlas Index Name
+          path: "embeddings",
+          queryVector: userVector,
+          numCandidates: 100,
+          limit: 6
+        }
+      },
+      {
+        $lookup: {
+          from: "companies",
+          localField: "company",
+          foreignField: "_id",
+          as: "companyInfo"
+        }
+      },
+      {
+        $addFields: {
+          company: { $ifNull: [{ $arrayElemAt: ["$companyInfo.name", 0] }, "External Company"] },
+          companyLogo: { $arrayElemAt: ["$companyInfo.logo", 0] },
+          // Convert score to percentage (e.g., 0.95 -> 95)
+          matchScore: {
+            $round: [{ $multiply: [{ $meta: "vectorSearchScore" }, 100] }, 0]
+          }
+        }
+      },
+      {
+        $project: {
+          companyInfo: 0,
+          embeddings: 0,
+          created_by: 0
+        }
       }
-
-      // C. Bio Context (Lower Weight: 1 point)
-      if (bio && jobTitle.split(" ").some(word => bio.toLowerCase().includes(word))) {
-        score += 1;
-      }
-
-      return { job, score };
-    });
-
-    // 4. Sort by score and filter out zero-matches
-    const finalRecommendations = recommendedJobs
-      .filter(item => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 6) // Return top 6 matches
-      .map(item => {
-        // Format response to match your getAllJobs structure
-        const job = item.job;
-        return {
-          _id: job._id,
-          title: job.title,
-          description: sanitizeHTML(job.description),
-          location: job.location,
-          jobType: job.jobType,
-          salary: job.salary,
-          company: job.company?.name || "External Company",
-          companyLogo: job.companyLogo || job.company?.logo || null,
-          applicationLink: job.applicationLink || null,
-          createdAt: job.createdAt,
-          matchScore: item.score // Useful for UI "Match %"
-        };
-      });
+    ]);
 
     return res.status(200).json({
       success: true,
-      recommendations: finalRecommendations
+      recommendations
     });
 
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "Server Error", success: false });
+    console.error("Vector Search Error:", error);
+    return res.status(500).json({ message: "Recommendation engine error", success: false });
   }
 };
 /* -------------------------------------------------
@@ -143,7 +152,8 @@ export const postJob = async (req, res) => {
         .status(400)
         .json({ message: "All fields are required", success: false });
     }
-
+    const combinedText = `${title} ${description} ${requirements}`.toLowerCase();
+    const vector = await generateFreeEmbeddings(combinedText);
     const job = await Job.create({
       title,
       description: sanitizeHTML(description),
@@ -157,6 +167,7 @@ export const postJob = async (req, res) => {
       created_by: userId,
       applicationLink: applicationLink || null,
       companyLogo: companyLogo || null,
+      embeddings: vector || [] // Store the generated embedding vector
     });
 
     return res.status(201).json({

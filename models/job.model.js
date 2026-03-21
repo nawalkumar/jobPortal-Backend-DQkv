@@ -62,6 +62,10 @@ const jobSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
+    embeddings: {
+      type: [Number], // Change from Number to [Number]
+      default: []
+    },
   },
   { timestamps: true }
 );

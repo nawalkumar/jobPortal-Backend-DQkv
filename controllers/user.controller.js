@@ -3,6 +3,25 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import getDataUri from "../utils/datauri.js";
 import cloudinary from "../utils/cloud.js";
+import axios from "axios";
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse');
+
+// IMPORT your vectorizer
+import { generateFreeEmbeddings } from "../utils/vectorizer.js";
+
+// HELPER: Needs to be inside this file (or imported) to work
+const extractTextFromPDF = async (url) => {
+  try {
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    const data = await pdf(response.data);
+    return data.text.toLowerCase();
+  } catch (error) {
+    console.error("PDF Parsing Error:", error);
+    return "";
+  }
+};
 
 export const register = async (req, res) => {
   console.log("=== REGISTER ENDPOINT HIT ===");
@@ -145,14 +164,9 @@ export const logout = async (req, res) => {
     res.status(500).json({ message: "Server Error logging out", success: false });
   }
 };
-
 export const updateProfile = async (req, res) => {
   try {
     const userId = req.id;
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized - no token", success: false });
-    }
-
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found", success: false });
 
@@ -162,18 +176,42 @@ export const updateProfile = async (req, res) => {
     if (email) user.email = email;
     if (phoneNumber) user.phoneNumber = phoneNumber;
     if (bio) user.profile.bio = bio;
-    if (skills) user.profile.skills = skills.split(",");
 
+    let skillsArray = user.profile.skills || [];
+    if (skills) {
+      skillsArray = skills.split(",");
+      user.profile.skills = skillsArray;
+    }
+
+    let currentResumeText = "";
     if (req.file) {
       const fileUri = getDataUri(req.file);
       const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
-        resource_type: "image",
+        resource_type: "auto",
         folder: "resumes",
-        public_id: `${userId}_resume`,
       });
 
       user.profile.resume = cloudResponse.secure_url;
       user.profile.resumeOriginalName = req.file.originalname;
+
+      currentResumeText = await extractTextFromPDF(cloudResponse.secure_url);
+    } else if (user.profile.resume) {
+      currentResumeText = await extractTextFromPDF(user.profile.resume);
+    }
+
+    // Embeddings Generation
+    const textToEmbed = `
+      ${user.profile.bio || ""} 
+      ${skillsArray.join(" ")} 
+      ${currentResumeText}
+    `.toLowerCase().trim();
+
+    if (textToEmbed.length > 10) {
+      // Logic check: only update if generateFreeEmbeddings exists
+      const newVector = await generateFreeEmbeddings(textToEmbed);
+      if (newVector) {
+        user.embeddings = newVector;
+      }
     }
 
     await user.save();
@@ -193,7 +231,7 @@ export const updateProfile = async (req, res) => {
       success: true,
     });
   } catch (error) {
-    console.error("PROFILE UPDATE CRASH:", error.message, error.stack);
+    console.error("PROFILE UPDATE ERROR:", error);
     res.status(500).json({ message: "Server Error updating profile", success: false });
   }
 };

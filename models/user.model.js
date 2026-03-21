@@ -55,6 +55,10 @@ const userSchema = new mongoose.Schema(
         default: "",
       },
     },
+    embeddings: {
+      type: [Number], // Change from Number to [Number]
+      default: []
+    },
   },
   { timestamps: true }
 );
