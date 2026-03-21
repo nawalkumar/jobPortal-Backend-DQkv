@@ -1,7 +1,111 @@
 // controllers/job.controller.js
 import { Job } from "../models/job.model.js";
 import sanitizeHTML from "../utils/sanitizeHTML.js";
+import axios from "axios";
+import pdf from "pdf-parse";
+import { User } from "../models/user.model.js";
 
+// Helper function to extract text from Cloudinary PDF
+const extractTextFromPDF = async (url) => {
+  try {
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    const data = await pdf(response.data);
+    return data.text.toLowerCase();
+  } catch (error) {
+    console.error("PDF Parsing Error:", error);
+    return "";
+  }
+};
+
+/* -------------------------------------------------
+   USER – get recommended jobs based on Profile & Resume
+------------------------------------------------- */
+export const getRecommendedJobs = async (req, res) => {
+  try {
+    const userId = req.id; // From your auth middleware
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found", success: false });
+    }
+
+    const { skills, resume, bio } = user.profile;
+    let resumeText = "";
+
+    // 1. Extract text from resume if it exists
+    if (resume) {
+      resumeText = await extractTextFromPDF(resume);
+    }
+
+    // 2. Fetch all active jobs (Internal + populated Company)
+    const allJobs = await Job.find({}).populate("company");
+
+    // 3. Scoring Algorithm
+    const recommendedJobs = allJobs.map((job) => {
+      let score = 0;
+      const jobTitle = job.title.toLowerCase();
+      const jobDesc = job.description.toLowerCase();
+      const jobReqs = job.requirements.map(r => r.toLowerCase());
+
+      // A. Skill Matching (High Weight: 5 points per match)
+      skills.forEach((skill) => {
+        const s = skill.toLowerCase();
+        if (jobTitle.includes(s)) score += 5;
+        if (jobDesc.includes(s)) score += 3;
+        if (jobReqs.some(req => req.includes(s))) score += 4;
+      });
+
+      // B. Resume Keyword Matching (Medium Weight: 2 points per match)
+      if (resumeText) {
+        // Match Job Requirements against Resume content
+        jobReqs.forEach((req) => {
+          if (resumeText.includes(req)) score += 2;
+        });
+        // Match Job Title against Resume
+        if (resumeText.includes(jobTitle)) score += 3;
+      }
+
+      // C. Bio Context (Lower Weight: 1 point)
+      if (bio && jobTitle.split(" ").some(word => bio.toLowerCase().includes(word))) {
+        score += 1;
+      }
+
+      return { job, score };
+    });
+
+    // 4. Sort by score and filter out zero-matches
+    const finalRecommendations = recommendedJobs
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6) // Return top 6 matches
+      .map(item => {
+        // Format response to match your getAllJobs structure
+        const job = item.job;
+        return {
+          _id: job._id,
+          title: job.title,
+          description: sanitizeHTML(job.description),
+          location: job.location,
+          jobType: job.jobType,
+          salary: job.salary,
+          company: job.company?.name || "External Company",
+          companyLogo: job.companyLogo || job.company?.logo || null,
+          applicationLink: job.applicationLink || null,
+          createdAt: job.createdAt,
+          matchScore: item.score // Useful for UI "Match %"
+        };
+      });
+
+    return res.status(200).json({
+      success: true,
+      recommendations: finalRecommendations
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Server Error", success: false });
+  }
+};
 /* -------------------------------------------------
    ADMIN – post a job
 ------------------------------------------------- */
@@ -78,12 +182,12 @@ export const getAllJobs = async (req, res) => {
 
     if (keyword !== "") {
       const searchTerms = keyword.split(/\s+/).filter(term => term.length > 0);
-      
+
       if (searchTerms.length > 0) {
         query.$and = searchTerms.map(term => {
           // Check if the term is a number or range (e.g., "50", "0-3")
           const isNumeric = /\d/.test(term);
-          
+
           const orConditions = [
             { title: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
             { location: { $regex: new RegExp(`\\b${term}\\b`, 'i') } },
@@ -95,7 +199,7 @@ export const getAllJobs = async (req, res) => {
           if (isNumeric) {
             // Extract the first number found (e.g., "50k" -> 50, "0-3" -> 0)
             const num = parseInt(term.match(/\d+/)[0]);
-            
+
             orConditions.push(
               { experienceLevel: { $lte: num + 2, $gte: num - 2 } }, // Range check for experience
               { salary: { $gte: num * 1000 - 20000, $lte: num * 1000 + 20000 } } // Rough salary check
