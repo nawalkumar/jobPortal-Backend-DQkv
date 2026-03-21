@@ -5,6 +5,7 @@ import {
   getAdminJobs,
   getAllJobs,
   getJobById,
+  getRecommendedJobs,
   postJob,
 } from "../controllers/job.controller.js";
 
