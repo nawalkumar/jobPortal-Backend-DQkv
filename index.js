@@ -47,6 +47,8 @@ app.use("/api/user", userRoute);
 app.use("/api/company", companyRoute);
 app.use("/api/job", jobRoute);
 app.use("/api/application", applicationRoute);
+console.log("ENV CHECK:", process.env.MONGO_URI);
+console.log("ENV KEYS:", Object.keys(process.env));
 
 // TEST ROUTE: Only in development
 if (process.env.NODE_ENV !== "production") {
