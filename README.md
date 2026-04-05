@@ -189,7 +189,9 @@ npm run dev- both for frontend and Backend
 - Uses **HNSW (Hierarchical Navigable Small World)** indexing
 - Enables **fast approximate nearest neighbor (ANN)** search
 
-Author:
+#Author:
+```
 Naval Kumar,
 NIT Sikkim exchange student
 @IIT Hyderabad Final Year
+```
